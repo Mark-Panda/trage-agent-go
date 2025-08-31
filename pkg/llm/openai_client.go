@@ -1,19 +1,18 @@
 package llm
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
+
+	openai "github.com/sashabaranov/go-openai"
 )
 
 // OpenAIClient OpenAI客户端实现
 type OpenAIClient struct {
 	*BaseLLMClient
-	httpClient *http.Client
+	client *openai.Client
 }
 
 // NewOpenAIClient 创建OpenAI客户端
@@ -25,77 +24,53 @@ func NewOpenAIClient(apiKey, baseURL, apiVersion string) *OpenAIClient {
 		apiVersion = "v1"
 	}
 
+	config := openai.DefaultConfig(apiKey)
+	config.BaseURL = baseURL
+	// 设置超时时间
+	config.HTTPClient = &http.Client{
+		Timeout: 120 * time.Second,
+	}
+
 	return &OpenAIClient{
 		BaseLLMClient: NewBaseLLMClient(apiKey, baseURL, apiVersion, "openai"),
-		httpClient: &http.Client{
-			Timeout: 120 * time.Second,
-		},
+		client:        openai.NewClientWithConfig(config),
 	}
 }
 
 // Chat 实现OpenAI聊天接口
 func (oac *OpenAIClient) Chat(messages []LLMMessage, tools []Tool, config ModelConfig) (*LLMMessage, error) {
-	// 构建OpenAI API请求
-	requestBody := map[string]interface{}{
-		"model":       config.GetModel(),
-		"messages":    oac.convertMessages(messages),
-		"max_tokens":  config.GetMaxTokens(),
-		"temperature": config.GetTemperature(),
+	// 转换消息格式
+	openaiMessages := oac.convertMessages(messages)
+
+	// 构建请求
+	req := openai.ChatCompletionRequest{
+		Model:       config.GetModel(),
+		Messages:    openaiMessages,
+		MaxTokens:   config.GetMaxTokens(),
+		Temperature: float32(config.GetTemperature()),
 	}
 
 	// 如果支持工具调用且有工具，添加工具定义
 	if config.GetSupportsToolCalling() && len(tools) > 0 {
-		requestBody["tools"] = oac.convertTools(tools)
-		requestBody["tool_choice"] = "auto"
+		req.Tools = oac.convertTools(tools)
+		req.ToolChoice = "auto"
 	}
-
-	// 序列化请求体
-	jsonBody, err := json.Marshal(requestBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request body: %w", err)
-	}
-
-	// 创建HTTP请求
-	url := fmt.Sprintf("%s/%s/chat/completions", oac.BaseURL, oac.APIVersion)
-	req, err := http.NewRequestWithContext(context.Background(), "POST", url, bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	// 设置请求头
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+oac.APIKey)
 
 	// 发送请求
-	resp, err := oac.httpClient.Do(req)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	resp, err := oac.client.CreateChatCompletion(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// 读取响应
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
-	}
-
-	// 检查HTTP状态码
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("OpenAI API error: %s, body: %s", resp.Status, string(body))
-	}
-
-	// 解析响应
-	var openAIResp OpenAIResponse
-	if err := json.Unmarshal(body, &openAIResp); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+		return nil, fmt.Errorf("failed to create chat completion: %w", err)
 	}
 
 	// 检查是否有选择
-	if len(openAIResp.Choices) == 0 {
+	if len(resp.Choices) == 0 {
 		return nil, fmt.Errorf("no choices in OpenAI response")
 	}
 
-	choice := openAIResp.Choices[0]
+	choice := resp.Choices[0]
 
 	// 转换为LLMMessage
 	response := &LLMMessage{
@@ -109,10 +84,10 @@ func (oac *OpenAIClient) Chat(messages []LLMMessage, tools []Tool, config ModelC
 		for i, tc := range choice.Message.ToolCalls {
 			response.ToolCalls[i] = ToolCall{
 				ID:   tc.ID,
-				Type: tc.Type,
+				Type: string(tc.Type),
 				Function: ToolCallFunction{
 					Name:      tc.Function.Name,
-					Arguments: tc.Function.Arguments,
+					Arguments: map[string]interface{}{"content": tc.Function.Arguments},
 				},
 			}
 		}
@@ -122,64 +97,31 @@ func (oac *OpenAIClient) Chat(messages []LLMMessage, tools []Tool, config ModelC
 }
 
 // convertMessages 转换消息格式
-func (oac *OpenAIClient) convertMessages(messages []LLMMessage) []map[string]interface{} {
-	result := make([]map[string]interface{}, len(messages))
+func (oac *OpenAIClient) convertMessages(messages []LLMMessage) []openai.ChatCompletionMessage {
+	result := make([]openai.ChatCompletionMessage, len(messages))
 	for i, msg := range messages {
-		result[i] = map[string]interface{}{
-			"role":    msg.Role,
-			"content": msg.Content,
-		}
-		if msg.Name != "" {
-			result[i]["name"] = msg.Name
-		}
-		if msg.ToolCallID != "" {
-			result[i]["tool_call_id"] = msg.ToolCallID
+		result[i] = openai.ChatCompletionMessage{
+			Role:       msg.Role,
+			Content:    msg.Content,
+			Name:       msg.Name,
+			ToolCallID: msg.ToolCallID,
 		}
 	}
 	return result
 }
 
 // convertTools 转换工具定义格式
-func (oac *OpenAIClient) convertTools(tools []Tool) []map[string]interface{} {
-	result := make([]map[string]interface{}, len(tools))
+func (oac *OpenAIClient) convertTools(tools []Tool) []openai.Tool {
+	result := make([]openai.Tool, len(tools))
 	for i, tool := range tools {
-		result[i] = map[string]interface{}{
-			"type": "function",
-			"function": map[string]interface{}{
-				"name":        tool.Function.Name,
-				"description": tool.Function.Description,
-				"parameters":  tool.Function.Parameters,
+		result[i] = openai.Tool{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
+				Name:        tool.Function.Name,
+				Description: tool.Function.Description,
+				Parameters:  tool.Function.Parameters,
 			},
 		}
 	}
 	return result
-}
-
-// OpenAIResponse OpenAI API响应结构
-type OpenAIResponse struct {
-	ID      string `json:"id"`
-	Object  string `json:"object"`
-	Created int64  `json:"created"`
-	Model   string `json:"model"`
-	Choices []struct {
-		Index   int `json:"index"`
-		Message struct {
-			Role      string `json:"role"`
-			Content   string `json:"content"`
-			ToolCalls []struct {
-				ID       string `json:"id"`
-				Type     string `json:"type"`
-				Function struct {
-					Name      string                 `json:"name"`
-					Arguments map[string]interface{} `json:"arguments"`
-				} `json:"function"`
-			} `json:"tool_calls,omitempty"`
-		} `json:"message"`
-		FinishReason string `json:"finish_reason"`
-	} `json:"choices"`
-	Usage struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-		TotalTokens      int `json:"total_tokens"`
-	} `json:"usage"`
 }
