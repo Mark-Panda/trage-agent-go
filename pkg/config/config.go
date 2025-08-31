@@ -44,6 +44,43 @@ type ModelConfig struct {
 	ResolvedProvider *ModelProvider `yaml:"-" json:"-"`
 }
 
+// ToLLMModelConfig 转换为LLM ModelConfig接口
+func (m *ModelConfig) ToLLMModelConfig() interface{} {
+	return &modelConfigAdapter{m}
+}
+
+// modelConfigAdapter 适配器，实现llm.ModelConfig接口
+type modelConfigAdapter struct {
+	*ModelConfig
+}
+
+func (m *modelConfigAdapter) GetModel() string             { return m.Model }
+func (m *modelConfigAdapter) GetMaxTokens() int            { return m.MaxTokens }
+func (m *modelConfigAdapter) GetTemperature() float64      { return m.Temperature }
+func (m *modelConfigAdapter) GetTopP() float64             { return m.TopP }
+func (m *modelConfigAdapter) GetTopK() int                 { return m.TopK }
+func (m *modelConfigAdapter) GetParallelToolCalls() bool   { return m.ParallelToolCalls }
+func (m *modelConfigAdapter) GetMaxRetries() int           { return m.MaxRetries }
+func (m *modelConfigAdapter) GetSupportsToolCalling() bool { return m.SupportsToolCalling }
+func (m *modelConfigAdapter) GetAPIKey() string {
+	if m.ResolvedProvider != nil {
+		return m.ResolvedProvider.APIKey
+	}
+	return ""
+}
+func (m *modelConfigAdapter) GetBaseURL() string {
+	if m.ResolvedProvider != nil {
+		return m.ResolvedProvider.BaseURL
+	}
+	return ""
+}
+func (m *modelConfigAdapter) GetAPIVersion() string {
+	if m.ResolvedProvider != nil {
+		return m.ResolvedProvider.APIVersion
+	}
+	return ""
+}
+
 // ResolveConfigValues 解析配置值，支持命令行和环境变量覆盖
 func (m *ModelConfig) ResolveConfigValues(
 	modelProviders map[string]ModelProvider,

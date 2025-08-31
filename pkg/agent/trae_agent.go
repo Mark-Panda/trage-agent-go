@@ -152,7 +152,8 @@ func (ta *TraeAgent) ExecuteTask(ctx context.Context) (*AgentExecution, error) {
 		}
 
 		// 调用LLM
-		response, err := ta.llmClient.Chat(messages, ta.toolRegistry.GetToolDefinitions(), nil)
+		llmConfig := ta.modelConfig.ToLLMModelConfig().(llm.ModelConfig)
+		response, err := ta.llmClient.Chat(messages, ta.toolRegistry.GetToolDefinitions(), llmConfig)
 		if err != nil {
 			execution.Error = fmt.Sprintf("LLM call failed: %v", err)
 			break
