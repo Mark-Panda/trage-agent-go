@@ -67,7 +67,7 @@ func (oac *OpenAIClient) Chat(messages []LLMMessage, tools []Tool, config ModelC
 
 	// 检查是否有选择
 	if len(resp.Choices) == 0 {
-		return nil, fmt.Errorf("no choices in OpenAI response")
+		return nil, fmt.Errorf("no choices in openai response")
 	}
 
 	choice := resp.Choices[0]

@@ -62,12 +62,12 @@ func (dc *DoubaoClient) Chat(messages []LLMMessage, tools []Tool, config ModelCo
 	// 调用豆包API
 	resp, err := dc.client.CreateChatCompletion(context.Background(), req)
 	if err != nil {
-		return nil, fmt.Errorf("Doubao API call failed: %w", err)
+		return nil, fmt.Errorf("doubao API call failed: %s", err.Error())
 	}
 
 	// 检查是否有选择
 	if len(resp.Choices) == 0 {
-		return nil, fmt.Errorf("no choices in Doubao response")
+		return nil, fmt.Errorf("no choices in doubao response")
 	}
 
 	choice := resp.Choices[0]
