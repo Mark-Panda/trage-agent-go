@@ -14,7 +14,7 @@ agents:
 
 model_providers:  # 模型提供商配置
   doubao:
-    api_key: 21c10e1f-24d3-4af3-ae77-d1f77b323232
+    api_key: xxxxx
     provider: doubao
     base_url: https://ark.cn-beijing.volces.com/api/v3/
   ollama:
