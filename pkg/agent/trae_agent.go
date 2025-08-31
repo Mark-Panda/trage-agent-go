@@ -24,6 +24,7 @@ type TraeAgent struct {
 	mcpClients          []interface{} // MCP客户端列表，用于清理
 	cliConsole          Console
 	allowMCPServersFlag bool
+	conversationHistory []llm.LLMMessage // 对话历史记录
 }
 
 // NewTraeAgent 创建TraeAgent
@@ -62,6 +63,12 @@ func (ta *TraeAgent) NewTask(task string, extraArgs map[string]string, toolNames
 		return err
 	}
 
+	// 将新任务添加到对话历史
+	ta.AddToConversationHistory(llm.LLMMessage{
+		Role:    "user",
+		Content: task,
+	})
+
 	// TraeAgent特定的任务初始化逻辑
 	if extraArgs != nil {
 		if projectPath, exists := extraArgs["project_path"]; exists {
@@ -86,6 +93,21 @@ func (ta *TraeAgent) NewTask(task string, extraArgs map[string]string, toolNames
 	}
 
 	return nil
+}
+
+// AddToConversationHistory 添加消息到对话历史
+func (ta *TraeAgent) AddToConversationHistory(message llm.LLMMessage) {
+	ta.conversationHistory = append(ta.conversationHistory, message)
+}
+
+// GetConversationHistory 获取对话历史
+func (ta *TraeAgent) GetConversationHistory() []llm.LLMMessage {
+	return ta.conversationHistory
+}
+
+// ClearConversationHistory 清空对话历史
+func (ta *TraeAgent) ClearConversationHistory() {
+	ta.conversationHistory = make([]llm.LLMMessage, 0)
 }
 
 // Run 运行代理（重写BaseAgent的实现）
@@ -127,12 +149,17 @@ func (ta *TraeAgent) ExecuteTask(ctx context.Context) (*AgentExecution, error) {
 	// 构建系统提示
 	systemPrompt := ta.buildSystemPrompt()
 
-	// 创建初始消息
+	// 创建初始消息，包含系统提示和对话历史
 	messages := []llm.LLMMessage{
 		{
 			Role:    "system",
 			Content: systemPrompt,
 		},
+	}
+
+	// 添加对话历史（如果有的话）
+	if len(ta.conversationHistory) > 0 {
+		messages = append(messages, ta.conversationHistory...)
 	}
 
 	// 主执行循环
@@ -143,11 +170,11 @@ func (ta *TraeAgent) ExecuteTask(ctx context.Context) (*AgentExecution, error) {
 			break
 		}
 
-		// 添加用户消息（如果是第一步）
-		if ta.GetStepCount() == 0 {
+		// 添加用户消息（如果是第一步且没有对话历史）
+		if ta.GetStepCount() == 0 && len(ta.conversationHistory) == 0 {
 			messages = append(messages, llm.LLMMessage{
 				Role:    "user",
-				Content: ta.getCurrentTask(),
+				Content: ta.BaseAgent.GetTask(), // 使用实际的用户任务输入
 			})
 		}
 
@@ -155,12 +182,24 @@ func (ta *TraeAgent) ExecuteTask(ctx context.Context) (*AgentExecution, error) {
 		llmConfig := ta.modelConfig.ToLLMModelConfig().(llm.ModelConfig)
 		response, err := ta.llmClient.Chat(messages, ta.toolRegistry.GetToolDefinitions(), llmConfig)
 		if err != nil {
-			execution.Error = fmt.Sprintf("LLM call failed: %v", err)
+			// 改进错误处理，提供更详细的错误信息
+			errorMsg := fmt.Sprintf("LLM call failed: %v", err)
+			if strings.Contains(err.Error(), "404") {
+				errorMsg += " - 模型不存在或无访问权限，请检查模型名称和API密钥"
+			} else if strings.Contains(err.Error(), "401") {
+				errorMsg += " - API密钥无效，请检查API密钥"
+			} else if strings.Contains(err.Error(), "rate limit") {
+				errorMsg += " - 达到API调用限制，请稍后重试"
+			}
+			execution.Error = errorMsg
 			break
 		}
 
 		// 记录消息
 		messages = append(messages, *response)
+
+		// 将响应添加到对话历史
+		ta.AddToConversationHistory(*response)
 
 		// 检查是否有工具调用
 		if len(response.ToolCalls) > 0 {
@@ -215,11 +254,22 @@ func (ta *TraeAgent) ExecuteTask(ctx context.Context) (*AgentExecution, error) {
 				execution.ToolResults = append(execution.ToolResults, toolResult)
 
 				// 将工具结果添加到消息历史
-				messages = append(messages, llm.LLMMessage{
+				toolMessage := llm.LLMMessage{
 					Role:       "tool",
 					Content:    toolResult.Result,
 					ToolCallID: toolCall.ID,
-				})
+				}
+				messages = append(messages, toolMessage)
+
+				// 将工具结果添加到对话历史
+				ta.AddToConversationHistory(toolMessage)
+			}
+
+			// 工具执行完成后，检查是否应该停止
+			if ta.shouldStopExecution(execution) {
+				execution.Success = true
+				execution.Output = "任务通过工具执行完成"
+				break
 			}
 		} else {
 			// 没有工具调用，检查是否是最终答案
@@ -272,15 +322,23 @@ func (ta *TraeAgent) buildSystemPrompt() string {
 3. 验证结果
 4. 报告完成状态
 
-记住：始终使用工具来完成任务，不要假设或猜测。`
+重要提示：
+- 当用户要求创建文件时，必须使用edit_file工具实际创建文件
+- 当用户要求执行命令时，必须使用bash工具实际执行
+- 不要只提供代码示例，要实际完成任务
+- 始终使用工具来完成任务，不要假设或猜测。`
 
 	return prompt
 }
 
 // getCurrentTask 获取当前任务
 func (ta *TraeAgent) getCurrentTask() string {
-	// 这里应该返回当前正在执行的任务
-	// 暂时返回一个占位符
+	if ta.BaseAgent != nil && ta.BaseAgent.config != nil {
+		// 从配置中获取任务描述，如果没有则返回默认值
+		if ta.BaseAgent.config.Model != "" {
+			return fmt.Sprintf("使用模型 %s 执行软件工程任务", ta.BaseAgent.config.Model)
+		}
+	}
 	return "执行软件工程任务"
 }
 
@@ -304,10 +362,40 @@ func (ta *TraeAgent) isTaskComplete(content string) bool {
 	return false
 }
 
+// shouldStopExecution 检查是否应该停止执行
+func (ta *TraeAgent) shouldStopExecution(execution *AgentExecution) bool {
+	// 检查是否有成功的工具执行结果
+	successfulTools := 0
+	for _, result := range execution.ToolResults {
+		if result.Success {
+			successfulTools++
+		}
+	}
+
+	// 如果工具执行成功且没有错误，考虑停止
+	if successfulTools > 0 && execution.Error == "" {
+		// 检查最近的工具结果是否表明任务完成
+		if len(execution.ToolResults) > 0 {
+			lastResult := execution.ToolResults[len(execution.ToolResults)-1]
+			if lastResult.Success && ta.isTaskComplete(lastResult.Result) {
+				return true
+			}
+		}
+
+		// 检查是否达到了合理的执行步数
+		if ta.GetStepCount() >= 3 { // 允许至少3步来完成任务
+			return true
+		}
+	}
+
+	return false
+}
+
 // getExecutionSteps 获取执行步骤
 func (ta *TraeAgent) getExecutionSteps() []ExecutionStep {
-	// 这里应该返回实际的执行步骤
-	// 暂时返回空切片
+	if ta.BaseAgent != nil {
+		return ta.BaseAgent.getExecutionSteps()
+	}
 	return make([]ExecutionStep, 0)
 }
 

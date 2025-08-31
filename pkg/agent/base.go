@@ -80,6 +80,7 @@ type BaseAgent struct {
 	executionTracker   *tools.ToolExecutionTracker
 	stepCount          int
 	maxSteps           int
+	task               string // 存储当前任务内容
 }
 
 // NewBaseAgent 创建基础代理
@@ -127,6 +128,9 @@ func (ba *BaseAgent) GetToolRegistry() *tools.ToolRegistry {
 
 // NewTask 创建新任务
 func (ba *BaseAgent) NewTask(task string, extraArgs map[string]string, toolNames []string) error {
+	// 保存任务内容
+	ba.task = task
+
 	// 重置步数计数
 	ba.stepCount = 0
 
@@ -214,9 +218,21 @@ func (ba *BaseAgent) GetMaxSteps() int {
 	return ba.maxSteps
 }
 
+// GetTask 获取当前任务内容
+func (ba *BaseAgent) GetTask() string {
+	return ba.task
+}
+
 // GetExecutionTracker 获取执行跟踪器
 func (ba *BaseAgent) GetExecutionTracker() *tools.ToolExecutionTracker {
 	return ba.executionTracker
+}
+
+// getExecutionSteps 获取执行步骤
+func (ba *BaseAgent) getExecutionSteps() []ExecutionStep {
+	// 这里应该返回实际的执行步骤
+	// 暂时返回空切片，后续可以实现步骤跟踪
+	return make([]ExecutionStep, 0)
 }
 
 // TrackToolExecution 跟踪工具执行

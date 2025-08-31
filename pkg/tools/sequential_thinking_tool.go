@@ -37,7 +37,7 @@ func NewSequentialThinkingTool() *SequentialThinkingTool {
 		BaseTool: NewBaseTool(
 			"sequential_thinking",
 			"记录顺序思考过程，帮助代理进行结构化思考",
-			"用于记录代理在解决问题过程中的思考步骤，帮助跟踪推理过程",
+			"sequential_thinking",
 			parameters,
 		),
 	}

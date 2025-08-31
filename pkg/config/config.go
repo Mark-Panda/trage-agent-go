@@ -170,9 +170,13 @@ func LoadConfig(configFile string) (*Config, error) {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
+	// 解析环境变量占位符
+	configContent := string(data)
+	configContent = os.ExpandEnv(configContent)
+
 	// 使用YAML库解析配置
 	var config Config
-	if err := yaml.Unmarshal(data, &config); err != nil {
+	if err := yaml.Unmarshal([]byte(configContent), &config); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 

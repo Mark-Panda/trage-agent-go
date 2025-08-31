@@ -2,7 +2,9 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/sashabaranov/go-openai"
 )
@@ -83,8 +85,15 @@ func (dc *DoubaoClient) Chat(messages []LLMMessage, tools []Tool, config ModelCo
 			// 解析工具调用参数
 			var arguments map[string]interface{}
 			if tc.Function.Arguments != "" {
-				// 这里需要解析JSON字符串为map
-				// 暂时使用空map，实际使用时需要JSON解析
+				// 清理参数字符串，移除可能的无效字符
+				cleanArgs := strings.TrimSpace(tc.Function.Arguments)
+				// 尝试解析JSON字符串为map
+				if err := json.Unmarshal([]byte(cleanArgs), &arguments); err != nil {
+					// 如果解析失败，尝试手动解析关键参数
+					fmt.Printf("Warning: failed to parse tool call arguments: %v, attempting manual parsing\n", err)
+					arguments = dc.manualParseArguments(cleanArgs)
+				}
+			} else {
 				arguments = make(map[string]interface{})
 			}
 
@@ -106,9 +115,15 @@ func (dc *DoubaoClient) Chat(messages []LLMMessage, tools []Tool, config ModelCo
 func (dc *DoubaoClient) convertMessages(messages []LLMMessage) []openai.ChatCompletionMessage {
 	result := make([]openai.ChatCompletionMessage, len(messages))
 	for i, msg := range messages {
+		// 确保消息有内容，豆包API要求messages.content不能为空
+		content := msg.Content
+		if content == "" {
+			content = " " // 使用空格作为默认内容
+		}
+
 		result[i] = openai.ChatCompletionMessage{
 			Role:      msg.Role,
-			Content:   msg.Content,
+			Content:   content,
 			Name:      msg.Name,
 			ToolCalls: nil, // 工具调用在响应中处理
 		}
@@ -119,6 +134,67 @@ func (dc *DoubaoClient) convertMessages(messages []LLMMessage) []openai.ChatComp
 		}
 	}
 	return result
+}
+
+// manualParseArguments 手动解析工具调用参数
+func (dc *DoubaoClient) manualParseArguments(argsStr string) map[string]interface{} {
+	arguments := make(map[string]interface{})
+
+	// 尝试提取常见的参数模式
+	// 查找 file_path, content, command 等关键参数
+
+	// 查找 file_path
+	if strings.Contains(argsStr, "file_path") {
+		// 简单的字符串提取，查找引号内的内容
+		if start := strings.Index(argsStr, `"file_path"`); start != -1 {
+			if colon := strings.Index(argsStr[start:], ":"); colon != -1 {
+				if quoteStart := strings.Index(argsStr[start+colon:], `"`); quoteStart != -1 {
+					startPos := start + colon + quoteStart + 1
+					if quoteEnd := strings.Index(argsStr[startPos:], `"`); quoteEnd != -1 {
+						filePath := argsStr[startPos : startPos+quoteEnd]
+						arguments["file_path"] = filePath
+					}
+				}
+			}
+		}
+	}
+
+	// 查找 content
+	if strings.Contains(argsStr, "content") {
+		if start := strings.Index(argsStr, `"content"`); start != -1 {
+			if colon := strings.Index(argsStr[start:], ":"); colon != -1 {
+				if quoteStart := strings.Index(argsStr[start+colon:], `"`); quoteStart != -1 {
+					startPos := start + colon + quoteStart + 1
+					if quoteEnd := strings.Index(argsStr[startPos:], `"`); quoteEnd != -1 {
+						content := argsStr[startPos : startPos+quoteEnd]
+						arguments["content"] = content
+					}
+				}
+			}
+		}
+	}
+
+	// 查找 command
+	if strings.Contains(argsStr, "command") {
+		if start := strings.Index(argsStr, `"command"`); start != -1 {
+			if colon := strings.Index(argsStr[start:], ":"); colon != -1 {
+				if quoteStart := strings.Index(argsStr[start+colon:], `"`); quoteStart != -1 {
+					startPos := start + colon + quoteStart + 1
+					if quoteEnd := strings.Index(argsStr[startPos:], `"`); quoteEnd != -1 {
+						command := argsStr[startPos : startPos+quoteEnd]
+						arguments["command"] = command
+					}
+				}
+			}
+		}
+	}
+
+	// 如果没有找到任何参数，返回空map
+	if len(arguments) == 0 {
+		fmt.Printf("Warning: manual parsing failed, no valid arguments found in: %s\n", argsStr)
+	}
+
+	return arguments
 }
 
 // convertTools 转换工具定义格式

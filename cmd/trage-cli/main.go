@@ -269,6 +269,23 @@ func startInteractive(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("config validation failed: %w", err)
 	}
 
+	// 显示配置信息
+	fmt.Println("📋 当前配置:")
+	if agentConfig, err := cfg.GetTraeAgentConfig(); err == nil {
+		fmt.Printf("  • 代理类型: %s\n", "trae_agent")
+		fmt.Printf("  • 最大步数: %d\n", agentConfig.MaxSteps)
+		fmt.Printf("  • 启用工具: %s\n", strings.Join(agentConfig.Tools, ", "))
+	}
+
+	if modelConfig, err := cfg.GetModelConfig("trae_agent_model"); err == nil {
+		fmt.Printf("  • 模型: %s\n", modelConfig.Model)
+		fmt.Printf("  • 提供商: %s\n", modelConfig.ModelProvider)
+		if modelConfig.ResolvedProvider != nil {
+			fmt.Printf("  • API密钥: %s...\n", modelConfig.ResolvedProvider.APIKey[:min(8, len(modelConfig.ResolvedProvider.APIKey))])
+		}
+	}
+	fmt.Println()
+
 	// 创建代理工厂
 	factory := agent.NewAgentFactory()
 
@@ -312,6 +329,8 @@ func runInteractiveLoop(agentInstance agent.Agent, cfg *config.Config) error {
 			showStatus(agentInstance, cfg)
 		case "clear":
 			clearScreen()
+		case "clear-history":
+			clearConversationHistory(agentInstance)
 		case "exit", "quit":
 			fmt.Println("👋 再见！")
 			return nil
@@ -335,6 +354,7 @@ func showHelp() {
 	fmt.Println("• 'help' - 显示此帮助信息")
 	fmt.Println("• 'status' - 显示代理状态")
 	fmt.Println("• 'clear' - 清屏")
+	fmt.Println("• 'clear-history' - 清空对话历史")
 	fmt.Println("• 'exit' 或 'quit' - 退出会话")
 }
 
@@ -358,6 +378,16 @@ func showStatus(agentInstance agent.Agent, cfg *config.Config) {
 // clearScreen 清屏
 func clearScreen() {
 	fmt.Print("\033[H\033[2J")
+}
+
+// clearConversationHistory 清空对话历史
+func clearConversationHistory(agentInstance agent.Agent) {
+	if traeAgent, ok := agentInstance.(*agent.TraeAgent); ok {
+		traeAgent.ClearConversationHistory()
+		fmt.Println("🗑️  对话历史已清空")
+	} else {
+		fmt.Println("⚠️  此代理类型不支持清空对话历史")
+	}
 }
 
 // executeTask 执行任务
